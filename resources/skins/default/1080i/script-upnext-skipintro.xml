@@ -1,71 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <window>
-    <defaultcontrol always="true">3012</defaultcontrol>
+    <defaultcontrol>3012</defaultcontrol>
 
     <controls>
-        <control type="group">
-            <animation type="WindowOpen" reversible="false">
-                <effect type="fade" start="0" end="100" time="220" />
-                <effect type="slide" start="280,0" end="0,0" time="220" />
-            </animation>
+        <control type="button" id="3012">
+            <left>1560</left>
+            <top>760</top>
+            <width>280</width>
+            <height>72</height>
 
-            <animation type="WindowClose" reversible="false">
-                <effect type="fade" start="100" end="0" time="180" />
-                <effect type="slide" start="0,0" end="280,0" time="180" />
-            </animation>
+            <label>SKIP INTRO</label>
 
-            <control type="image">
-                <left>1560</left>
-                <top>760</top>
-                <width>280</width>
-                <height>72</height>
-                <texture border="30" colordiffuse="FFFFFFFF">button.png</texture>
-            </control>
+            <font>font20_title</font>
 
-            <control type="button" id="3012">
-                <left>1560</left>
-                <top>760</top>
-                <width>280</width>
-                <height>72</height>
+            <textcolor>FFFFFFFF</textcolor>
+            <focusedcolor>FFFFFFFF</focusedcolor>
 
-                <label>$ADDON[service.upnext 30834]</label>
-
-                <font>font20_title</font>
-
-                <textcolor>FF111111</textcolor>
-                <focusedcolor>FF111111</focusedcolor>
-                <selectedcolor>FF111111</selectedcolor>
-                <shadowcolor>00000000</shadowcolor>
-
-                <align>center</align>
-                <aligny>center</aligny>
-
-                <texturefocus
-                    border="30"
-                    colordiffuse="00FFFFFF">
-                    button.png
-                </texturefocus>
-
-                <texturenofocus
-                    border="30"
-                    colordiffuse="00FFFFFF">
-                    button.png
-                </texturenofocus>
-
-                <alttexturefocus
-                    border="30"
-                    colordiffuse="00FFFFFF">
-                    button.png
-                </alttexturefocus>
-
-                <alttexturenofocus
-                    border="30"
-                    colordiffuse="00FFFFFF">
-                    button.png
-                </alttexturefocus>
-
-                <pulseonselect>no</pulseonselect>
-            </control>
+            <align>center</align>
+            <aligny>center</aligny>
         </control>
     </controls>
 </window>

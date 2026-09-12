@@ -289,23 +289,22 @@ class AniBridge(object):
         self,
         tmdb_id,
         tvdb_id,
-        anilist_episode,
+        tmdb_season,
+        tmdb_episode,
     ):
         """
         Resolve:
 
-            TMDB show
+            TMDB show + season + episode
                 ->
-            AniList ID
-                ->
-            AniList episode
+            AniList ID + episode
                 ->
             TVDB show + season + episode
 
-        TMDB season is deliberately not used here.
+        TMDB/TVDB use season-scoped descriptors.
+        AniList does not use seasons.
 
         Returns:
-
             {
                 "tvdb_id": 123,
                 "season": 1,
@@ -315,70 +314,119 @@ class AniBridge(object):
 
         or None.
         """
+
         if (
             tmdb_id is None
             or tvdb_id is None
-            or anilist_episode is None
+            or tmdb_season is None
+            or tmdb_episode is None
         ):
+           return None
+
+        try:
+            tmdb_id = int(tmdb_id)
+            tvdb_id = int(tvdb_id)
+            tmdb_season = int(tmdb_season)
+            tmdb_episode = int(tmdb_episode)
+        except (TypeError, ValueError):
             return None
 
         # ---------------------------------------------------------
-        # TMDB -> AniList
+        # 1. TMDB season -> AniList ID + AniList episode
         # ---------------------------------------------------------
 
         tmdb_data = self.fetch_mappings(
             "tmdb_show",
             tmdb_id,
+            "s%d" % tmdb_season,
         )
 
         if not tmdb_data:
             self.log(
-                "AniBridge: no TMDB mapping for %s"
-                % tmdb_id
+                "AniBridge: no TMDB mapping for %s S%02d"
+                % (
+                    tmdb_id,
+                    tmdb_season,
+                )
             )
             return None
 
-        anilist_ids = set()
+        tmdb_source = "tmdb_show:%d:s%d" % (
+            tmdb_id,
+            tmdb_season,
+        )
 
-        tmdb_prefix = "tmdb_show:%d:" % int(tmdb_id)
+        tmdb_targets = tmdb_data.get(
+            tmdb_source
+        )
 
-        for tmdb_source, tmdb_targets in tmdb_data.items():
-
-            if not tmdb_source.startswith(tmdb_prefix):
-                continue
-
-            if not isinstance(tmdb_targets, dict):
-                continue
-
-            for target_descriptor in tmdb_targets.keys():
-
-                if not target_descriptor.startswith("anilist:"):
-                    continue
-
-                try:
-                    anilist_id = int(
-                        target_descriptor.split(
-                            ":",
-                            1,
-                        )[1]
-                    )
-                except (TypeError, ValueError):
-                    continue
-
-                anilist_ids.add(anilist_id)
-
-        if not anilist_ids:
+        if not isinstance(tmdb_targets, dict):
             self.log(
-                "AniBridge: no AniList ID for TMDB %s"
-                % tmdb_id
+                "AniBridge: no source descriptor %s"
+                % tmdb_source
+            )
+            return None
+
+        # There can theoretically be more than one AniList
+        # target. Resolve the episode against the TMDB->AniList
+        # episode ranges before continuing.
+        anilist_candidates = []
+
+        for target_descriptor, edges in tmdb_targets.items():
+
+            if not target_descriptor.startswith(
+                "anilist:"
+            ):
+                continue
+
+            try:
+                anilist_id = int(
+                    target_descriptor.split(
+                        ":",
+                        1,
+                    )[1]
+                )
+            except (TypeError, ValueError):
+                continue
+
+            if not isinstance(edges, dict):
+                continue
+
+            for source_range, target_range in edges.items():
+
+                anilist_episode = self.resolve_episode_range(
+                    tmdb_episode,
+                    source_range,
+                    target_range,
+                )
+
+                if anilist_episode is None:
+                    continue
+
+                anilist_candidates.append(
+                    (
+                        anilist_id,
+                        anilist_episode,
+                    )
+                )
+
+        if not anilist_candidates:
+            self.log(
+                "AniBridge: no AniList episode mapping for "
+                "TMDB %s S%02dE%02d"
+                % (
+                    tmdb_id,
+                    tmdb_season,
+                    tmdb_episode,
+                )
             )
             return None
 
         # ---------------------------------------------------------
-        # AniList -> TVDB
+        # 2. AniList episode -> TVDB season + episode
         # ---------------------------------------------------------
 
-        for anilist_id in anilist_ids:
+        for anilist_id, anilist_episode in anilist_candidates:
 
             anilist_data = self.fetch_mappings(
                 "anilist",
@@ -388,90 +436,102 @@ class AniBridge(object):
             if not anilist_data:
                 continue
 
-            for anilist_source, anilist_targets in anilist_data.items():
+            anilist_source = "anilist:%d" % anilist_id
 
-                if anilist_source != "anilist:%d" % anilist_id:
+            anilist_targets = anilist_data.get(
+                anilist_source
+            )
+
+            if not isinstance(anilist_targets, dict):
+                continue
+
+            for target_descriptor, edges in (
+                anilist_targets.items()
+            ):
+
+                if not target_descriptor.startswith(
+                    "tvdb_show:"
+                ):
                     continue
 
-                if not isinstance(anilist_targets, dict):
+                target_parts = target_descriptor.split(
+                    ":"
+                )
+
+                if len(target_parts) != 3:
                     continue
 
-                for target_descriptor, edges in anilist_targets.items():
+                try:
+                    mapped_tvdb_id = int(
+                        target_parts[1]
+                    )
+                except (TypeError, ValueError):
+                    continue
 
-                    if not target_descriptor.startswith(
-                        "tvdb_show:"
-                    ):
+                if mapped_tvdb_id != tvdb_id:
+                    continue
+
+                tvdb_scope = target_parts[2]
+
+                if not tvdb_scope.startswith("s"):
+                    continue
+
+                try:
+                    tvdb_season = int(
+                        tvdb_scope[1:]
+                    )
+                except (TypeError, ValueError):
+                    continue
+
+                if not isinstance(edges, dict):
+                    continue
+
+                for source_range, target_range in (
+                    edges.items()
+                ):
+
+                    tvdb_episode = self.resolve_episode_range(
+                        anilist_episode,
+                        source_range,
+                        target_range,
+                    )
+
+                    if tvdb_episode is None:
                         continue
 
-                    target_parts = target_descriptor.split(":")
+                    result = {
+                        "tvdb_id": tvdb_id,
+                        "season": tvdb_season,
+                        "episode": tvdb_episode,
+                        "anilist_id": anilist_id,
+                        "anilist_episode": anilist_episode,
+                    }
 
-                    if len(target_parts) != 3:
-                        continue
-
-                    try:
-                        mapped_tvdb_id = int(target_parts[1])
-                    except (TypeError, ValueError):
-                        continue
-
-                    if mapped_tvdb_id != int(tvdb_id):
-                        continue
-
-                    tvdb_scope = target_parts[2]
-
-                    if not tvdb_scope.startswith("s"):
-                        continue
-
-                    try:
-                        tvdb_season = int(
-                            tvdb_scope[1:]
-                        )
-                    except (TypeError, ValueError):
-                        continue
-
-                    if not isinstance(edges, dict):
-                        continue
-
-                    for source_range, target_range in edges.items():
-
-                        tvdb_episode = self.resolve_episode_range(
+                    self.log(
+                        "AniBridge: TMDB %s S%02dE%02d -> "
+                        "AniList %s E%d -> "
+                        "TVDB %s S%02dE%02d"
+                        % (
+                            tmdb_id,
+                            tmdb_season,
+                            tmdb_episode,
+                            anilist_id,
                             anilist_episode,
-                            source_range,
-                            target_range,
+                            tvdb_id,
+                            tvdb_season,
+                            tvdb_episode,
                         )
+                    )
 
-                        if tvdb_episode is None:
-                            continue
-
-                        result = {
-                            "tvdb_id": int(tvdb_id),
-                            "season": tvdb_season,
-                            "episode": tvdb_episode,
-                            "anilist_id": anilist_id,
-                        }
-
-                        self.log(
-                            "AniBridge: TMDB %s -> "
-                            "AniList %s E%d -> "
-                            "TVDB %s S%02dE%02d"
-                            % (
-                                tmdb_id,
-                                anilist_id,
-                                anilist_episode,
-                                tvdb_id,
-                                tvdb_season,
-                                tvdb_episode,
-                            )
-                        )
-
-                        return result
+                    return result
 
         self.log(
-            "AniBridge: no mapping for TMDB %s / "
-            "AniList episode %s / TVDB %s"
+            "AniBridge: no TVDB mapping for "
+            "TMDB %s S%02dE%02d"
             % (
                 tmdb_id,
-                anilist_episode,
-                tvdb_id,
+                tmdb_season,
+                tmdb_episode,
             )
         )
 

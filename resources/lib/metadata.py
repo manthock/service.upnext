@@ -478,6 +478,7 @@ class MediaMetadata(object):
             mapping = self.anibridge.resolve_tmdb_to_tvdb_episode(
                 context["tmdb_id"],
                 context["tvdb_id"],
+				season,
                 episode,
             )
 

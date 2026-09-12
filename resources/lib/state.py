@@ -6,6 +6,7 @@ from metadata import MediaMetadata
 
 import api
 import constants
+import metadata
 import upnext
 import utils
 from settings import SETTINGS
@@ -51,8 +52,8 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.current_item = utils.create_item_details(item=None, reset=True)
         self.filename = None
         self.total_time = 0
-		self.media_context = None
-		self.media_metadata = MediaMetadata()
+        self.media_context = None
+        self.media_metadata = MediaMetadata()
         # Popup state variables
         self.next_item = None
         self.popup_time = 0
@@ -89,14 +90,23 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         except Exception:
             pass
         return None
-
+    
     def resolve_media_context(self):
-    self.media_context = self.media_metadata.resolve(
-        self.current_item
-    )
-    return self.media_context
-	
-	def reset(self):
+        self.media_context = None
+
+        if not self.current_item:
+            return None
+
+        item = self.current_item.get('details')
+
+        if not item:
+            return None
+
+        self.media_context = self.media_metadata.resolve(item)
+
+        return self.media_context
+
+    def reset(self):
         self.__init__(reset=True)  # pylint: disable=unnecessary-dunder-call
 
     def reset_item(self):
@@ -108,6 +118,7 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
                 reset=True,
             )
         self.next_item = None
+        self.media_context = None
 
     def get_tracked_file(self):
         return self.filename

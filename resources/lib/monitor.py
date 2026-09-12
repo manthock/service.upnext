@@ -139,6 +139,7 @@ class UpNextMonitor(xbmc.Monitor, object):
             play_info
         )
         if now_playing_item and now_playing_item['details']:
+            self.state.resolve_media_context()
             self.state.start_tracking(play_info['file'])
             self.state.reset_queue(on_start=True)
 

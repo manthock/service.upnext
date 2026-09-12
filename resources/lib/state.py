@@ -53,7 +53,7 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.current_item = utils.create_item_details(item=None, reset=True)
         self.filename = None
         self.total_time = 0
-        self.media_metadata = MediaMetadata()
+        self.media_metadata = metadata.MediaMetadata()
         self.media_context = None
         self.skip_intro_window = None
         # Popup state variables
@@ -109,18 +109,18 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         return self.media_context
 		
     def resolve_skip_intro(self):
-    """Resolve the Skip Intro window for the current episode."""
-    self.skip_intro_window = None
+        """Resolve the Skip Intro window for the current episode."""
+        self.skip_intro_window = None
 
-    if not self.media_context:
-        return None
+        if not self.media_context:
+            return None
 
-    self.skip_intro_window = skipintro.resolve(
-        self.media_context,
-        self.total_time,
-    )
+        self.skip_intro_window = skipintro.resolve(
+            self.media_context,
+            self.total_time,
+        )
 
-    return self.skip_intro_window
+        return self.skip_intro_window
 
     def reset(self):
         self.__init__(reset=True)  # pylint: disable=unnecessary-dunder-call

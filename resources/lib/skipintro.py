@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import json
-import time
 import urllib.parse
 import urllib.request
 
@@ -24,27 +23,38 @@ def _parse_number(value):
 
 
 def _normalize_window(start, end, total_time):
-    """Normalize a skip-intro window to seconds."""
-    start = _parse_number(start)
-    end = _parse_number(end)
-    total_time = _parse_number(total_time)
-
-    if start is None or end is None:
+    """Normalize a Skip Intro window to seconds."""
+    try:
+        end_seconds = float(end)
+    except (TypeError, ValueError):
         return None
 
-    # Reject obviously invalid windows.
-    if start < 0 or end <= start:
-        return None
+    try:
+        start_seconds = (
+            float(start)
+            if start is not None
+            else 1.0
+        )
+    except (TypeError, ValueError):
+        start_seconds = 1.0
 
-    if total_time is not None and total_time > 0:
-        if start >= total_time:
+    start_seconds = max(1.0, start_seconds)
+
+    try:
+        total_time = float(total_time)
+    except (TypeError, ValueError):
+        total_time = 0
+
+    if total_time > 0:
+        if start_seconds >= total_time:
             return None
-        end = min(end, total_time)
+        end_seconds = min(total_time, end_seconds)
 
-    if end <= start:
+    if end_seconds <= start_seconds:
         return None
 
-    return start, end
+    return start_seconds, end_seconds
+
 
 
 def _request_json(url):
@@ -77,72 +87,83 @@ def _request_json(url):
 
 def _fetch_theintrodb(media_context, total_time):
     """Resolve intro/recap end from TheIntroDB."""
-    tmdb_id = media_context.get('tmdb_id')
     season = media_context.get('season')
     episode = media_context.get('episode')
 
-    if tmdb_id is None or season is None or episode is None:
+    if season is None or episode is None:
         return None
 
-    query = urllib.parse.urlencode({
-        'tmdb_id': tmdb_id,
+    query = {
         'season': season,
         'episode': episode,
-    })
+    }
 
-    data = _request_json(
-        '{0}?{1}'.format(THEINTRODB_URL, query)
+    tmdb_id = media_context.get('tmdb_id')
+    imdb_id = media_context.get('imdb_id')
+
+    if tmdb_id is not None:
+        query['tmdb_id'] = tmdb_id
+    elif imdb_id:
+        query['imdb_id'] = imdb_id
+    else:
+        return None
+
+    url = '{0}?{1}'.format(
+        THEINTRODB_URL,
+        urllib.parse.urlencode(query),
     )
 
-    if not data:
+    data = _request_json(url)
+
+    if not isinstance(data, dict):
         return None
 
-    # TheIntroDB may return the segment list directly or
-    # wrap it in a media/segments object.
-    segments = data
+    for segment_name in ('recap', 'intro'):
+        entries = data.get(segment_name) or []
 
-    if isinstance(data, dict):
-        segments = (
-            data.get('segments')
-            or data.get('media')
-            or data.get('data')
-        )
+        valid_entries = []
 
-    if not isinstance(segments, list):
-        return None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
 
-    for segment in segments:
-        if not isinstance(segment, dict):
+            try:
+                end_ms = float(entry.get('end_ms'))
+            except (TypeError, ValueError):
+                continue
+
+            start_ms = entry.get('start_ms')
+
+            try:
+                start_ms = (
+                    float(start_ms)
+                    if start_ms is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                start_ms = None
+
+            if (
+                start_ms is not None
+                and end_ms <= start_ms
+            ):
+                continue
+
+            valid_entries.append(
+                (end_ms, start_ms)
+            )
+
+        if not valid_entries:
             continue
 
-        segment_type = str(
-            segment.get('type')
-            or segment.get('name')
-            or ''
-        ).lower()
-
-        if segment_type not in (
-            'intro',
-            'recap',
-            'opening',
-        ):
-            continue
-
-        start = (
-            segment.get('start')
-            or segment.get('start_sec')
-            or segment.get('start_seconds')
-        )
-
-        end = (
-            segment.get('end')
-            or segment.get('end_sec')
-            or segment.get('end_seconds')
-        )
+        end_ms, start_ms = sorted(
+            valid_entries,
+            key=lambda value: value[0],
+        )[0]
 
         window = _normalize_window(
-            start,
-            end,
+            None if start_ms is None else start_ms / 1000.0,
+            end_ms / 1000.0,
             total_time,
         )
 
@@ -151,9 +172,8 @@ def _fetch_theintrodb(media_context, total_time):
 
     return None
 
-
 def _fetch_introdb(media_context, total_time):
-    """Resolve intro end from IntroDB.app."""
+    """Resolve intro/recap end from IntroDB.app."""
     imdb_id = media_context.get('show_imdb_id')
 
     if not imdb_id:
@@ -181,63 +201,42 @@ def _fetch_introdb(media_context, total_time):
     })
 
     data = _request_json(
-        '{0}?{1}'.format(INTRODB_URL, query)
+        '{0}?{1}'.format(
+            INTRODB_URL,
+            query,
+        )
     )
 
-    if not data:
+    if not isinstance(data, dict):
         return None
 
-    segments = data
+    for segment_name in ('recap', 'intro'):
+        segment = data.get(segment_name)
 
-    if isinstance(data, dict):
-        segments = (
-            data.get('segments')
-            or data.get('data')
-        )
-
-    if not isinstance(segments, list):
-        return None
-
-    for segment in segments:
         if not isinstance(segment, dict):
             continue
 
-        segment_type = str(
-            segment.get('type')
-            or segment.get('name')
-            or ''
-        ).lower()
+        start_ms = segment.get('start_ms')
+        end_ms = segment.get('end_ms')
 
-        if segment_type not in (
-            'intro',
-            'recap',
-            'opening',
-        ):
-            continue
-
-        start = (
-            segment.get('start')
-            or segment.get('start_sec')
-            or segment.get('start_seconds')
-        )
-
-        end = (
-            segment.get('end')
-            or segment.get('end_sec')
-            or segment.get('end_seconds')
-        )
-
-        window = _normalize_window(
-            start,
-            end,
-            total_time,
-        )
+        if end_ms is not None:
+            window = _normalize_window(
+                None if start_ms is None
+                else float(start_ms) / 1000.0,
+                float(end_ms) / 1000.0,
+                total_time,
+            )
+        else:
+            window = _normalize_window(
+                segment.get('start_sec'),
+                segment.get('end_sec'),
+                total_time,
+            )
 
         if window:
             return window
 
     return None
-
 
 def resolve(media_context, total_time):
     """Resolve a Skip Intro window.

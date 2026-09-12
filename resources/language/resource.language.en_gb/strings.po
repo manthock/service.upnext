@@ -808,3 +808,7 @@ msgstr ""
 msgctxt "#30833"
 msgid "Allows for fetching episode details and playlist integration"
 msgstr ""
+
+msgctxt "#30834"
+msgid "Skip Intro"
+msgstr ""

@@ -30,6 +30,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         '_detector',
         '_popuphandler',
         '_skip_intro_timer',
+        '_skip_intro_popup',
         'detector',
         'player',
         'popuphandler',
@@ -50,6 +51,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         self._detector = None
         self._popuphandler = None
         self._skip_intro_timer = None
+        self._skip_intro_popup = None
 
         self.detector = None
         self.player = None
@@ -307,8 +309,11 @@ class UpNextMonitor(xbmc.Monitor, object):
 
         if play_info['speed'] < 1:
             return
-			
+
         if self.popuphandler and self.popuphandler.popup:
+            return
+
+        if self._skip_intro_popup:
             return
 
         window = self.state.skip_intro_window
@@ -323,12 +328,66 @@ class UpNextMonitor(xbmc.Monitor, object):
             return
 
         self.log(
-            'Skip Intro triggered at {0:.2f}s -> {1:.2f}s'.format(
+            'Showing Skip Intro: {0:.2f}s -> {1:.2f}s'.format(
                 current_time,
                 end_time,
             ),
             utils.LOGINFO,
         )
+
+        from skipintropopup import SkipIntroPopup
+
+        self._skip_intro_popup = SkipIntroPopup(
+            'script-upnext-skipintro.xml',
+            utils.get_addon_path(),
+            'default',
+            '1080i',
+            monitor=self,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        self._skip_intro_popup.show()
+		
+    def _skip_intro(self):
+        window = self.state.skip_intro_window
+
+        if not window:
+            self._close_skip_intro_popup()
+            return
+
+        _, end_time = window
+
+        play_info = self._get_playback_details()
+
+        if not play_info:
+            self._close_skip_intro_popup()
+            return
+
+        current_time = play_info['time']
+
+        if current_time >= end_time:
+            self._close_skip_intro_popup()
+            return
+
+        self.log(
+            'Skipping Intro: {0:.2f}s -> {1:.2f}s'.format(
+                current_time,
+                end_time,
+            ),
+            utils.LOGINFO,
+        )
+
+        self._close_skip_intro_popup()
+
+        try:
+            self.player.seekTime(end_time)
+        except RuntimeError:
+            self.log(
+                'Failed to seek to Skip Intro target',
+                utils.LOGWARNING,
+            )	
+
 
     def _event_handler_upnext_signal(self, **kwargs):
         # Delay event handler execution to allow events to queue up
@@ -573,6 +632,21 @@ class UpNextMonitor(xbmc.Monitor, object):
         if timer:
             timer.cancel()
             self._skip_intro_timer = None
+
+        self._close_skip_intro_popup()
+		
+    def _close_skip_intro_popup(self):
+        popup = getattr(self, '_skip_intro_popup', None)
+
+        if not popup:
+            return
+
+        try:
+            popup.close()
+        except RuntimeError:
+            pass
+
+        self._skip_intro_popup = None
 
     def _start_skip_intro_timer(self, play_info):
         self._stop_skip_intro_timer()

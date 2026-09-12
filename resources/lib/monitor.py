@@ -298,6 +298,37 @@ class UpNextMonitor(xbmc.Monitor, object):
                 self._launch_popup,
                 delay=popup_delay
             )
+			
+    def _event_handler_skip_intro(self, **_kwargs):
+        play_info = self._get_playback_details()
+
+        if not play_info:
+            return
+
+        if play_info['speed'] < 1:
+            return
+			
+        if self.popuphandler and self.popuphandler.popup:
+            return
+
+        window = self.state.skip_intro_window
+
+        if not window:
+            return
+
+        start_time, end_time = window
+        current_time = play_info['time']
+
+        if current_time < start_time or current_time >= end_time:
+            return
+
+        self.log(
+            'Skip Intro triggered at {0:.2f}s -> {1:.2f}s'.format(
+                current_time,
+                end_time,
+            ),
+            utils.LOGINFO,
+        )
 
     def _event_handler_upnext_signal(self, **kwargs):
         # Delay event handler execution to allow events to queue up
@@ -598,6 +629,11 @@ class UpNextMonitor(xbmc.Monitor, object):
             utils.LOGINFO,
         )
 
+        utils.event(
+            'upnext_skip_intro',
+            internal=True,
+        )
+
     def _widget_reload(self, init=False, force=False):
         if force:
             now = int(time())
@@ -657,6 +693,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         # Free references/resources
         self._stop_detector(terminate=True)
         self._stop_popuphandler(terminate=True)
+        self._stop_skip_intro_timer()
         self.waitForAbort(1)
 
         del self.state
@@ -672,6 +709,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         'Other.upnext_credits_detected': _event_handler_upnext_trigger,
         'Other.upnext_data': _event_handler_upnext_signal,
         'Other.upnext_trigger': _event_handler_upnext_trigger,
+        'Other.upnext_skip_intro': _event_handler_skip_intro,
         'Other.OnAVStart': _event_handler_av_start,
         'GUI.OnScreensaverActivated': _event_handler_screensaver_on,
         'GUI.OnScreensaverDeactivated': _event_handler_screensaver_off,

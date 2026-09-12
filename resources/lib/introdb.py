@@ -508,12 +508,12 @@ def _request(imdb_id, season, episode):
     return outro_time
 
 
-def get_outro_start(item, total_time):
+def get_outro_start(item, total_time, media_context=None):
     """
     Resolve IntroDB outro for the current episode.
 
-    Season and episode from UpNext's current_item are authoritative.
-    Player.GetItem is used only when it returns valid values.
+    AniBridge-mapped TVDB season/episode are authoritative when available.
+    Otherwise UpNext/Player.GetItem season and episode are used.
     """
 
     if not isinstance(item, dict):
@@ -527,14 +527,27 @@ def get_outro_start(item, total_time):
     if not isinstance(details, dict):
         return None
 
-    # UpNext season/episode are authoritative.
     season = _parse_int(details.get('season'))
     episode = _parse_int(details.get('episode'))
+	
+    mapped = bool(
+        media_context
+        and media_context.get('tvdb_season') is not None
+        and media_context.get('tvdb_episode') is not None
+    )
+	
+    if mapped:
+        season = _parse_int(
+            media_context.get('tvdb_season')
+        )
+        episode = _parse_int(
+            media_context.get('tvdb_episode')
+        )
 
-    # Player.GetItem may provide more reliable playback/library data,
-    # but never overwrite valid values with invalid ones.
     current_item = _get_current_playback_item()
 
+    # Only use Player.GetItem as a fallback when AniBridge
+    # did not provide a mapped episode.
     if current_item:
         playback_season = _parse_int(
             current_item.get('season')
@@ -575,18 +588,25 @@ def get_outro_start(item, total_time):
                 if value not in (None, '', -1, '-1')
             })
 
-    # Resolve the TV show IMDb, not the episode IMDb.
-    show_imdb_id = _get_playback_show_imdb_id(
-        current_item,
-        current_episode,
-    )
+    show_imdb_id = None
+	
+    if media_context:
+        show_imdb_id = _normalize_imdb_id(
+            media_context.get('show_imdb_id')
+        )
 
+    if not show_imdb_id:
+        show_imdb_id = _get_playback_show_imdb_id(
+            current_item,
+            current_episode,
+        )
+		
     if not show_imdb_id:
         show_imdb_id = _get_playback_imdb_id(
             current_item,
             current_episode,
-        )
-
+		)
+		
     if not show_imdb_id:
         _log(
             'IntroDB: show IMDb unavailable for S{:02d}E{:02d}'.format(

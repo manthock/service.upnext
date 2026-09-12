@@ -6,7 +6,6 @@ from metadata import MediaMetadata
 
 import api
 import constants
-import metadata
 import upnext
 import utils
 from settings import SETTINGS
@@ -328,7 +327,8 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
 
             introdb_time = introdb.get_outro_start(
                 self.current_item,
-                total_time
+                total_time,
+                self.media_context
             )
         except Exception as e:
             introdb_time = None

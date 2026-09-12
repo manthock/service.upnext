@@ -441,6 +441,11 @@ def resolve(media_context, total_time):
     """
     if not isinstance(media_context, dict):
         return None
+		
+    try:
+        total_time_key = round(float(total_time), 2)
+    except (TypeError, ValueError):
+        total_time_key = 0
 
     key = (
         media_context.get('show_imdb_id'),
@@ -449,6 +454,7 @@ def resolve(media_context, total_time):
         media_context.get('episode'),
         media_context.get('tvdb_season'),
         media_context.get('tvdb_episode'),
+        total_time_key,
     )
 
     if key in _CACHE:

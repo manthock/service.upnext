@@ -142,12 +142,14 @@ class UpNextMonitor(xbmc.Monitor, object):
         )
         if now_playing_item and now_playing_item['details']:
             self.state.resolve_media_context()
-            self.state.resolve_skip_intro()			
             self.state.start_tracking(play_info['file'])
             self.state.reset_queue(on_start=True)
 
             # Store popup time and check if cue point was provided
             self.state.set_popup_time(play_info['duration'])
+
+            # Resolve Skip Intro after total_time has been initialized.
+            self.state.resolve_skip_intro()
 
             # Launch subtitle detection only if chapter detection didn't find anything
             if (SETTINGS.detect_subtitles and not self.state.chapter_detected and not self.state.introdb_detected):

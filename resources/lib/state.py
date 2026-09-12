@@ -2,6 +2,7 @@
 # GNU General Public License v2.0 (see COPYING or https://www.gnu.org/licenses/gpl-2.0.txt)
 
 from __future__ import absolute_import, division, unicode_literals
+from metadata import MediaMetadata
 
 import api
 import constants
@@ -21,6 +22,8 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         'current_item',
         'filename',
         'total_time',
+		'media_context',
+		'media_metadata',
         # Popup state variables
         'next_item',
         'popup_time',
@@ -48,6 +51,8 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.current_item = utils.create_item_details(item=None, reset=True)
         self.filename = None
         self.total_time = 0
+		self.media_context = None
+		self.media_metadata = MediaMetadata()
         # Popup state variables
         self.next_item = None
         self.popup_time = 0
@@ -85,7 +90,13 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
             pass
         return None
 
-    def reset(self):
+    def resolve_media_context(self):
+    self.media_context = self.media_metadata.resolve(
+        self.current_item
+    )
+    return self.media_context
+	
+	def reset(self):
         self.__init__(reset=True)  # pylint: disable=unnecessary-dunder-call
 
     def reset_item(self):

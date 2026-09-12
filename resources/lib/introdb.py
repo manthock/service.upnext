@@ -546,9 +546,9 @@ def get_outro_start(item, total_time, media_context=None):
 
     current_item = _get_current_playback_item()
 
-    # Only use Player.GetItem as a fallback when AniBridge
+    # Player.GetItem is only a fallback when AniBridge
     # did not provide a mapped episode.
-    if current_item:
+    if current_item and not mapped:
         playback_season = _parse_int(
             current_item.get('season')
         )
@@ -556,11 +556,11 @@ def get_outro_start(item, total_time, media_context=None):
             current_item.get('episode')
         )
 
-        if playback_season is not None and playback_season >= 0:
-            season = playback_season
+    if playback_season is not None and playback_season >= 0:
+        season = playback_season
 
-        if playback_episode is not None and playback_episode >= 0:
-            episode = playback_episode
+    if playback_episode is not None and playback_episode >= 0:
+        episode = playback_episode
 
     if season is None or season < 0:
         _log(

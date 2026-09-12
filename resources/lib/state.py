@@ -2,10 +2,11 @@
 # GNU General Public License v2.0 (see COPYING or https://www.gnu.org/licenses/gpl-2.0.txt)
 
 from __future__ import absolute_import, division, unicode_literals
-from metadata import MediaMetadata
 
 import api
 import constants
+import metadata
+import skipintro
 import upnext
 import utils
 from settings import SETTINGS
@@ -22,8 +23,9 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         'current_item',
         'filename',
         'total_time',
-		'media_context',
-		'media_metadata',
+        'media_metadata',
+        'media_context',
+        'skip_intro_window',
         # Popup state variables
         'next_item',
         'popup_time',
@@ -51,8 +53,9 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.current_item = utils.create_item_details(item=None, reset=True)
         self.filename = None
         self.total_time = 0
-        self.media_context = None
         self.media_metadata = MediaMetadata()
+        self.media_context = None
+        self.skip_intro_window = None
         # Popup state variables
         self.next_item = None
         self.popup_time = 0
@@ -104,6 +107,20 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.media_context = self.media_metadata.resolve(item)
 
         return self.media_context
+		
+    def resolve_skip_intro(self):
+    """Resolve the Skip Intro window for the current episode."""
+    self.skip_intro_window = None
+
+    if not self.media_context:
+        return None
+
+    self.skip_intro_window = skipintro.resolve(
+        self.media_context,
+        self.total_time,
+    )
+
+    return self.skip_intro_window
 
     def reset(self):
         self.__init__(reset=True)  # pylint: disable=unnecessary-dunder-call
@@ -118,6 +135,7 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
             )
         self.next_item = None
         self.media_context = None
+        self.skip_intro_window = None
 
     def get_tracked_file(self):
         return self.filename

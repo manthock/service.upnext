@@ -556,11 +556,11 @@ def get_outro_start(item, total_time, media_context=None):
             current_item.get('episode')
         )
 
-    if playback_season is not None and playback_season >= 0:
-        season = playback_season
+        if playback_season is not None and playback_season >= 0:
+            season = playback_season
 
-    if playback_episode is not None and playback_episode >= 0:
-        episode = playback_episode
+        if playback_episode is not None and playback_episode >= 0:
+            episode = playback_episode
 
     if season is None or season < 0:
         _log(

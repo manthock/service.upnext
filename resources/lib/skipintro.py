@@ -5,12 +5,20 @@ import urllib.parse
 import urllib.request
 
 import utils
+import xbmc
 
 
 THEINTRODB_URL = 'https://api.theintrodb.org/v2/media'
 INTRODB_URL = 'https://api.introdb.app/segments'
 
 REQUEST_TIMEOUT = 5
+
+CHAPTER_MAX_PERCENT = 50
+CHAPTER_MIN_TARGET = 20.0
+CHAPTER_MIN_GAP = 20.0
+
+FALLBACK_START = 15.0
+FALLBACK_END = 90.0
 
 _CACHE = {}
 
@@ -238,6 +246,192 @@ def _fetch_introdb(media_context, total_time):
 
     return None
 
+def _get_chapter_starts(total_time):
+    """Return chapter start times in seconds."""
+    starts = []
+
+    # Kodi JSON-RPC is the preferred source.
+    try:
+        result = xbmc.executeJSONRPC(
+            json.dumps({
+                'jsonrpc': '2.0',
+                'method': 'Player.GetActivePlayers',
+                'params': {},
+                'id': 1,
+            })
+        )
+        players = json.loads(result).get('result', [])
+        player_id = None
+
+        for player in players:
+            if player.get('type') == 'video':
+                player_id = player.get('playerid')
+                break
+
+        if player_id is not None:
+            result = xbmc.executeJSONRPC(
+                json.dumps({
+                    'jsonrpc': '2.0',
+                    'method': 'Player.GetProperties',
+                    'params': {
+                        'playerid': player_id,
+                        'properties': ['chapters'],
+                    },
+                    'id': 1,
+                })
+            )
+
+            chapters = (
+                json.loads(result)
+                .get('result', {})
+                .get('chapters', [])
+            )
+
+            for chapter in chapters:
+                value = chapter.get('time')
+
+                if isinstance(value, dict):
+                    hours = int(value.get('hours', 0))
+                    minutes = int(value.get('minutes', 0))
+                    seconds = int(value.get('seconds', 0))
+                    milliseconds = int(
+                        value.get('milliseconds', 0)
+                    )
+
+                    start = (
+                        hours * 3600
+                        + minutes * 60
+                        + seconds
+                        + milliseconds / 1000.0
+                    )
+                elif isinstance(value, (int, float)):
+                    start = float(value)
+                else:
+                    start = None
+
+                if start is not None:
+                    starts.append(start)
+
+    except Exception:
+        pass
+
+    if starts:
+        return sorted(set(starts))
+
+    # Fallback for Kodi builds exposing chapter information
+    # through Player.Chapters.
+    try:
+        raw = xbmc.getInfoLabel('Player.Chapters')
+
+        if raw:
+            percentages = []
+
+            for token in raw.split(','):
+                token = token.strip()
+
+                if not token:
+                    continue
+
+                try:
+                    percentages.append(float(token))
+                except ValueError:
+                    return []
+
+            for percentage in percentages:
+                if 0 <= percentage < 100:
+                    starts.append(
+                        total_time * percentage / 100.0
+                    )
+
+    except Exception:
+        pass
+
+    return sorted(set(starts))
+	
+def _chapter_window(total_time):
+    """Resolve a Skip Intro window from chapter markers."""
+    try:
+        total_time = float(total_time)
+    except (TypeError, ValueError):
+        return None
+
+    if total_time <= 0:
+        return None
+
+    starts = _get_chapter_starts(total_time)
+
+    if not starts:
+        return None
+
+    early_cutoff = total_time * (
+        CHAPTER_MAX_PERCENT / 100.0
+    )
+
+    candidates = []
+    previous_start = 0.0
+
+    for start_time in starts:
+        if start_time <= 0:
+            previous_start = max(
+                previous_start,
+                start_time,
+            )
+            continue
+
+        if start_time < CHAPTER_MIN_TARGET:
+            previous_start = start_time
+            continue
+
+        if (
+            start_time <= early_cutoff
+            and start_time - previous_start >= CHAPTER_MIN_GAP
+        ):
+            candidates.append(start_time)
+
+        previous_start = start_time
+
+    if len(candidates) >= 2:
+        return (
+            candidates[0],
+            candidates[1],
+        )
+
+    if len(candidates) == 1:
+        return (
+            1.0,
+            candidates[0],
+        )
+
+    return None
+
+def _manual_window(total_time):
+    """Return the configured/manual Skip Intro window."""
+    try:
+        total_time = float(total_time)
+    except (TypeError, ValueError):
+        return None
+
+    if total_time <= 0:
+        return None
+
+    start = max(
+        1.0,
+        min(
+            FALLBACK_START,
+            max(1.0, total_time - 1.0),
+        ),
+    )
+
+    end = max(
+        start + 1.0,
+        min(FALLBACK_END, total_time),
+    )
+
+    if end <= start:
+        return None
+
+    return start, end
+
 def resolve(media_context, total_time):
     """Resolve a Skip Intro window.
 
@@ -280,5 +474,15 @@ def resolve(media_context, total_time):
         _CACHE[key] = result
         return result
 
-    _CACHE[key] = None
-    return None
+    # Fall back to chapter markers.
+    result = _chapter_window(total_time)
+
+    if result:
+        _CACHE[key] = result
+        return result
+
+    # Finally use the manual fallback.
+    result = _manual_window(total_time)
+
+    _CACHE[key] = result
+    return result

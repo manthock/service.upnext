@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog" id="12999">
+    <zorder>1000</zorder>
+
+    <controls>
+        <control type="group">
+            <left>1450</left>
+            <top>850</top>
+            <width>650</width>
+            <height>180</height>
+
+            <control type="button" id="9000">
+                <left>0</left>
+                <top>0</top>
+                <width>650</width>
+                <height>120</height>
+                <label>Skip Intro</label>
+                <font>font24</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <focusedcolor>FFFFFFFF</focusedcolor>
+            </control>
+        </control>
+    </controls>
+</window>

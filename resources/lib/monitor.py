@@ -7,6 +7,7 @@ from time import time
 
 import api
 import constants
+import dialog
 import detector
 import subtitle_end_detector
 import player
@@ -29,8 +30,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         '_started',
         '_detector',
         '_popuphandler',
-        '_skip_intro_timer',
-        '_skip_intro_popup',
+		'_skip_intro',
         'detector',
         'player',
         'popuphandler',
@@ -50,8 +50,7 @@ class UpNextMonitor(xbmc.Monitor, object):
 
         self._detector = None
         self._popuphandler = None
-        self._skip_intro_timer = None
-        self._skip_intro_popup = None
+        self._skip_intro = None
 
         self.detector = None
         self.player = None
@@ -143,15 +142,11 @@ class UpNextMonitor(xbmc.Monitor, object):
             play_info
         )
         if now_playing_item and now_playing_item['details']:
-            self.state.resolve_media_context()
             self.state.start_tracking(play_info['file'])
             self.state.reset_queue(on_start=True)
 
             # Store popup time and check if cue point was provided
             self.state.set_popup_time(play_info['duration'])
-
-            # Resolve Skip Intro after total_time has been initialized.
-            self.state.resolve_skip_intro()
 
             # Launch subtitle detection only if chapter detection didn't find anything
             if (SETTINGS.detect_subtitles and not self.state.chapter_detected and not self.state.introdb_detected):
@@ -184,7 +179,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         # Remove remnants from previous operations
         self._stop_detector()
         self._stop_popuphandler()
-        self._stop_skip_intro_timer()
+        self._stop_skip_intro()
 
         # Playback can start without triggering a stop callback on previous
         # video. Reset state if playback was not requested by UpNext
@@ -237,7 +232,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         # Remove remnants from previous operations
         self._stop_detector()
         self._stop_popuphandler()
-        self._stop_skip_intro_timer()
+        self._stop_skip_intro()
 
         self.state.reset_queue()
         # OnStop can occur before/after the next video has started playing
@@ -300,94 +295,6 @@ class UpNextMonitor(xbmc.Monitor, object):
                 self._launch_popup,
                 delay=popup_delay
             )
-			
-    def _event_handler_skip_intro(self, **_kwargs):
-        play_info = self._get_playback_details()
-
-        if not play_info:
-            return
-
-        if play_info['speed'] < 1:
-            return
-
-        if self.popuphandler and self.popuphandler.popup:
-            return
-
-        if self._skip_intro_popup:
-            return
-
-        window = self.state.skip_intro_window
-
-        if not window:
-            return
-
-        start_time, end_time = window
-        current_time = play_info['time']
-
-        if current_time < start_time or current_time >= end_time:
-            return
-
-        self.log(
-            'Showing Skip Intro: {0:.2f}s -> {1:.2f}s'.format(
-                current_time,
-                end_time,
-            ),
-            utils.LOGINFO,
-        )
-
-        from skipintropopup import SkipIntroPopup
-
-        self._skip_intro_popup = SkipIntroPopup(
-            'script-upnext-skipintro.xml',
-            utils.get_addon_path(),
-            'default',
-            '1080i',
-            monitor=self,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        self._skip_intro_popup.show()
-		
-    def _skip_intro(self):
-        window = self.state.skip_intro_window
-
-        if not window:
-            self._close_skip_intro_popup()
-            return
-
-        _, end_time = window
-
-        play_info = self._get_playback_details()
-
-        if not play_info:
-            self._close_skip_intro_popup()
-            return
-
-        current_time = play_info['time']
-
-        if current_time >= end_time:
-            self._close_skip_intro_popup()
-            return
-
-        self.log(
-            'Skipping Intro: {0:.2f}s -> {1:.2f}s'.format(
-                current_time,
-                end_time,
-            ),
-            utils.LOGINFO,
-        )
-
-        self._close_skip_intro_popup()
-
-        try:
-            self.player.seekTime(end_time)
-        except RuntimeError:
-            self.log(
-                'Failed to seek to Skip Intro target',
-                utils.LOGWARNING,
-            )	
-
 
     def _event_handler_upnext_signal(self, **kwargs):
         # Delay event handler execution to allow events to queue up
@@ -443,6 +350,31 @@ class UpNextMonitor(xbmc.Monitor, object):
         self._idle[0] = constants.IDLE_STATE['active']
 
         return play_info
+
+    def _launch_skip_intro(self):
+        if self.state.skip_intro_target is None:
+            return
+
+        if self.state.skip_intro_prompted:
+            return
+
+        try:
+            skip_intro_dialog = dialog.SkipIntroDialog(
+                'skipintro.xml',
+                utils.get_addon_path(),
+                'default',
+                '1080i',
+                player=self.player,
+                state=self.state
+            )
+            skip_intro_dialog.doModal()
+            del skip_intro_dialog
+
+        except Exception as exc:
+            self.log(
+                'Skip Intro dialog error: {0}'.format(exc),
+                utils.LOGERROR
+            )
 
     def _launch_subtitle_detector(self, file_path):
         if not self.state or not self.player:
@@ -548,7 +480,8 @@ class UpNextMonitor(xbmc.Monitor, object):
         # Remove remnants from previous operations
         self._stop_detector()
         self._stop_popuphandler()
-        self._stop_skip_intro_timer()
+        self._stop_skip_intro()
+
 
         # Exit if not playing, paused, or rewinding
         if not play_info or play_info['speed'] < 1:
@@ -561,6 +494,34 @@ class UpNextMonitor(xbmc.Monitor, object):
             self.state.reset_tracking()
             self._stop_detector(terminate=True, store=True)
             return
+		
+        # Schedule Skip Intro at the beginning of the intro window.
+        if (
+            self.state.skip_intro_start is not None
+            and self.state.skip_intro_target is not None
+            and not self.state.skip_intro_prompted
+        ):
+            if play_info['time'] >= self.state.skip_intro_start:
+                skip_intro_delay = 0
+            else:
+                skip_intro_delay = utils.calc_wait_time(
+                    end_time=self.state.skip_intro_start,
+                    start_time=play_info['time'],
+                    rate=play_info['speed']
+                )
+
+            if skip_intro_delay is not None:
+                self.log(
+                    'Skip Intro starting in {0}s'.format(
+                        skip_intro_delay
+                    ),
+                    utils.LOGINFO
+                )
+
+                self._skip_intro = utils.run_threaded(
+                    self._launch_skip_intro,
+                    delay=skip_intro_delay
+                )
 
         # Determine time until popup is required, scaled to real time
         popup_delay = utils.calc_wait_time(
@@ -591,8 +552,14 @@ class UpNextMonitor(xbmc.Monitor, object):
                 self._launch_popup,
                 delay=popup_delay
             )
-			
-        self._start_skip_intro_timer(play_info)
+
+    def _stop_skip_intro(self):
+        skip_intro_timer = getattr(self, '_skip_intro', None)
+
+        if skip_intro_timer:
+            skip_intro_timer.cancel()
+            del self._skip_intro
+            self._skip_intro = None
 
     def _stop_detector(self, terminate=False, store=False):
         detector_timer = getattr(self, '_detector', None)
@@ -625,88 +592,6 @@ class UpNextMonitor(xbmc.Monitor, object):
                 del self.popuphandler
                 self.popuphandler = None
                 self.log('Cleanup popuphandler')
-
-    def _stop_skip_intro_timer(self):
-        timer = getattr(self, '_skip_intro_timer', None)
-
-        if timer:
-            timer.cancel()
-            self._skip_intro_timer = None
-
-        self._close_skip_intro_popup()
-		
-    def _close_skip_intro_popup(self):
-        popup = getattr(self, '_skip_intro_popup', None)
-
-        if not popup:
-            return
-
-        try:
-            popup.close()
-        except RuntimeError:
-            pass
-
-        self._skip_intro_popup = None
-
-    def _start_skip_intro_timer(self, play_info):
-        self._stop_skip_intro_timer()
-
-        window = self.state.skip_intro_window
-
-        if not window:
-            return
-
-        start_time, end_time = window
-
-        if play_info['time'] >= end_time:
-            return
-
-        if play_info['time'] >= start_time:
-            delay = 0
-        else:
-            delay = utils.calc_wait_time(
-                end_time=start_time,
-                start_time=play_info['time'],
-                rate=play_info['speed']
-            )
-
-        if delay is None:
-            return
-
-        self.log(
-            'Skip Intro available in {0}s ({1:.2f} -> {2:.2f})'.format(
-                delay,
-                start_time,
-                end_time,
-            ),
-            utils.LOGINFO,
-        )
-
-        self._skip_intro_timer = utils.run_threaded(
-            self._show_skip_intro,
-            delay=delay,
-        )
-		
-    def _show_skip_intro(self):
-        window = self.state.skip_intro_window
-
-        if not window:
-            return
-
-        start_time, end_time = window
-
-        self.log(
-            'Skip Intro window reached: {0:.2f} -> {1:.2f}'.format(
-                start_time,
-                end_time,
-            ),
-            utils.LOGINFO,
-        )
-
-        utils.event(
-            'upnext_skip_intro',
-            internal=True,
-        )
 
     def _widget_reload(self, init=False, force=False):
         if force:
@@ -767,7 +652,7 @@ class UpNextMonitor(xbmc.Monitor, object):
         # Free references/resources
         self._stop_detector(terminate=True)
         self._stop_popuphandler(terminate=True)
-        self._stop_skip_intro_timer()
+        self._stop_skip_intro()
         self.waitForAbort(1)
 
         del self.state
@@ -783,7 +668,6 @@ class UpNextMonitor(xbmc.Monitor, object):
         'Other.upnext_credits_detected': _event_handler_upnext_trigger,
         'Other.upnext_data': _event_handler_upnext_signal,
         'Other.upnext_trigger': _event_handler_upnext_trigger,
-        'Other.upnext_skip_intro': _event_handler_skip_intro,
         'Other.OnAVStart': _event_handler_av_start,
         'GUI.OnScreensaverActivated': _event_handler_screensaver_on,
         'GUI.OnScreensaverDeactivated': _event_handler_screensaver_off,

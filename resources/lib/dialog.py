@@ -269,3 +269,54 @@ class UpNextPopup(xbmcgui.WindowXMLDialog, object):
 
     def is_shuffle_on(self):
         return self.shuffle_on
+
+class SkipIntroDialog(xbmcgui.WindowXMLDialog, object):
+    """Dialog displayed while an intro can be skipped."""
+
+    __slots__ = (
+        'player',
+        'state',
+    )
+
+    def __init__(self, *args, **kwargs):
+        self.player = kwargs.get('player')
+        self.state = kwargs.get('state')
+
+        super(SkipIntroDialog, self).__init__(*args)
+
+    def onAction(self, action):  # pylint: disable=invalid-name
+        if action == xbmcgui.ACTION_NAV_BACK:
+            self.close()
+            return
+
+        if action == xbmcgui.ACTION_STOP:
+            self.close()
+            return
+
+    def onClick(self, controlId):  # pylint: disable=invalid-name
+        if controlId != constants.SKIP_INTRO_CTRL_ID:
+            return
+
+        target = self.state.skip_intro_target
+
+        if target is None:
+            self.close()
+            return
+
+        try:
+            current_time = self.player.getTime()
+        except RuntimeError:
+            self.close()
+            return
+
+        if current_time >= target:
+            self.close()
+            return
+
+        try:
+            self.player.seekTime(target)
+        except RuntimeError:
+            pass
+
+        self.state.skip_intro_prompted = True
+        self.close()

@@ -5,8 +5,6 @@ from __future__ import absolute_import, division, unicode_literals
 
 import api
 import constants
-import metadata
-import skipintro
 import upnext
 import utils
 from settings import SETTINGS
@@ -23,15 +21,15 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         'current_item',
         'filename',
         'total_time',
-        'media_metadata',
-        'media_context',
-        'skip_intro_window',
         # Popup state variables
         'next_item',
         'popup_time',
         'popup_cue',
         'introdb_detected',
         'chapter_detected',
+        'skip_intro_start',
+        'skip_intro_target',
+        'skip_intro_prompted',
         'detect_time',
         'shuffle_on',
         # Tracking player state variables
@@ -53,15 +51,15 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         self.current_item = utils.create_item_details(item=None, reset=True)
         self.filename = None
         self.total_time = 0
-        self.media_metadata = metadata.MediaMetadata()
-        self.media_context = None
-        self.skip_intro_window = None
         # Popup state variables
         self.next_item = None
         self.popup_time = 0
         self.popup_cue = False
         self.introdb_detected = False
         self.chapter_detected = False
+        self.skip_intro_start = None
+        self.skip_intro_target = None
+        self.skip_intro_prompted = False
         self.detect_time = 0
         self.shuffle_on = False
         # Tracking player state variables
@@ -92,35 +90,6 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         except Exception:
             pass
         return None
-    
-    def resolve_media_context(self):
-        self.media_context = None
-
-        if not self.current_item:
-            return None
-
-        item = self.current_item.get('details')
-
-        if not item:
-            return None
-
-        self.media_context = self.media_metadata.resolve(item)
-
-        return self.media_context
-		
-    def resolve_skip_intro(self):
-        """Resolve the Skip Intro window for the current episode."""
-        self.skip_intro_window = None
-
-        if not self.media_context:
-            return None
-
-        self.skip_intro_window = skipintro.resolve(
-            self.media_context,
-            self.total_time,
-        )
-
-        return self.skip_intro_window
 
     def reset(self):
         self.__init__(reset=True)  # pylint: disable=unnecessary-dunder-call
@@ -134,8 +103,6 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
                 reset=True,
             )
         self.next_item = None
-        self.media_context = None
-        self.skip_intro_window = None
 
     def get_tracked_file(self):
         return self.filename
@@ -339,14 +306,35 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
         # IntroDB: authoritative outro timestamp
         # ============================================================
         self.introdb_detected = False
+        self.skip_intro_start = None
+        self.skip_intro_target = None
+        self.skip_intro_prompted = False
 
         try:
             import introdb
 
+            intro_window = introdb.get_intro_window(
+                self.current_item,
+                total_time
+            )
+
+            if intro_window:
+                (
+                    self.skip_intro_start,
+                    self.skip_intro_target
+                ) = intro_window
+
+                self.log(
+                    'Skip Intro: {:.2f}s -> {:.2f}s'.format(
+                        self.skip_intro_start,
+                        self.skip_intro_target
+                    ),
+                    utils.LOGINFO
+                )
+
             introdb_time = introdb.get_outro_start(
                 self.current_item,
-                total_time,
-                self.media_context
+                total_time
             )
         except Exception as e:
             introdb_time = None
@@ -521,19 +509,28 @@ class UpNextState(object):  # pylint: disable=too-many-public-methods
             # Fallback to now playing info if plugin does not provide current
             # episode details
             current_video = self.data.get('current_video')
-            if not current_video:
+            if (
+                not current_video
+                or (
+                    play_info.get('type') == 'episode'
+                    and (
+                        utils.get_int(current_video, 'season') == constants.UNDEFINED
+                        or utils.get_int(current_video, 'episode') == constants.UNDEFINED
+                    )
+                )
+            ):
                 current_video = api.get_now_playing(
                     properties=api.get_json_properties(play_info),
                     retry=SETTINGS.api_retry_attempts,
                 )
         else:
             current_video = None
-
         self.log('Plugin current_video: {0}'.format(current_video))
         if not current_video:
             return None
 
         return current_video
+
 
     @classmethod
     # pylint: disable-next=too-many-branches,too-many-return-statements,too-many-locals

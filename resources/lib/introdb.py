@@ -36,6 +36,7 @@ INTRODB_SEGMENTS_URL = 'https://api.introdb.app/segments'
 INTRODB_TIMEOUT = 5
 
 _CACHE = {}
+_PAYLOAD_CACHE = {}
 _EPISODE_CACHE = {}
 _SHOW_CACHE = {}
 
@@ -382,18 +383,17 @@ def _get_playback_imdb_id(current_item, current_episode):
     )
 
 
-def _get_outro_start(payload):
-    """Extract outro start from IntroDB response."""
-
+def _get_segment_start(payload, segment_name):
+    """Extract a segment start time from an IntroDB response."""
     if not isinstance(payload, dict):
         return None
 
-    outro = payload.get('outro')
+    segment = payload.get(segment_name)
 
-    if not isinstance(outro, dict):
+    if not isinstance(segment, dict):
         return None
 
-    start_ms = outro.get('start_ms')
+    start_ms = segment.get('start_ms')
 
     if start_ms is not None:
         try:
@@ -401,7 +401,7 @@ def _get_outro_start(payload):
         except (TypeError, ValueError):
             pass
 
-    start_sec = outro.get('start_sec')
+    start_sec = segment.get('start_sec')
 
     if start_sec is not None:
         try:
@@ -412,8 +412,51 @@ def _get_outro_start(payload):
     return None
 
 
+def _get_segment_end(payload, segment_name):
+    """Extract a segment end time from an IntroDB response."""
+    if not isinstance(payload, dict):
+        return None
+
+    segment = payload.get(segment_name)
+
+    if not isinstance(segment, dict):
+        return None
+
+    end_ms = segment.get('end_ms')
+
+    if end_ms is not None:
+        try:
+            return float(end_ms) / 1000.0
+        except (TypeError, ValueError):
+            pass
+
+    end_sec = segment.get('end_sec')
+
+    if end_sec is not None:
+        try:
+            return float(end_sec)
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+def _get_outro_start(payload):
+    """Extract outro start from IntroDB response."""
+    return _get_segment_start(payload, 'outro')
+
+
+
 def _request(imdb_id, season, episode):
     """Request segment data from IntroDB."""
+    cache_key = (
+        imdb_id,
+        season,
+        episode,
+    )
+
+    if cache_key in _PAYLOAD_CACHE:
+        return _PAYLOAD_CACHE[cache_key]
 
     query = urlencode({
         'imdb_id': imdb_id,
@@ -482,38 +525,17 @@ def _request(imdb_id, season, episode):
         )
         return None
 
-    outro_time = _get_outro_start(payload)
+    _PAYLOAD_CACHE[cache_key] = payload
 
-    if outro_time is None:
-        _log(
-            'IntroDB: no outro found for {} S{:02d}E{:02d}'.format(
-                imdb_id,
-                season,
-                episode,
-            ),
-            utils.LOGDEBUG
-        )
-        return None
-
-    _log(
-        'IntroDB: outro at {:.2f}s for {} S{:02d}E{:02d}'.format(
-            outro_time,
-            imdb_id,
-            season,
-            episode,
-        ),
-        utils.LOGINFO
-    )
-
-    return outro_time
+    return payload
 
 
-def get_outro_start(item, total_time, media_context=None):
+def get_outro_start(item, total_time):
     """
     Resolve IntroDB outro for the current episode.
 
-    AniBridge-mapped TVDB season/episode are authoritative when available.
-    Otherwise UpNext/Player.GetItem season and episode are used.
+    Season and episode from UpNext's current_item are authoritative.
+    Player.GetItem is used only when it returns valid values.
     """
 
     if not isinstance(item, dict):
@@ -527,28 +549,15 @@ def get_outro_start(item, total_time, media_context=None):
     if not isinstance(details, dict):
         return None
 
+    # UpNext season/episode are authoritative.
     season = _parse_int(details.get('season'))
     episode = _parse_int(details.get('episode'))
-	
-    mapped = bool(
-        media_context
-        and media_context.get('tvdb_season') is not None
-        and media_context.get('tvdb_episode') is not None
-    )
-	
-    if mapped:
-        season = _parse_int(
-            media_context.get('tvdb_season')
-        )
-        episode = _parse_int(
-            media_context.get('tvdb_episode')
-        )
 
+    # Player.GetItem may provide more reliable playback/library data,
+    # but never overwrite valid values with invalid ones.
     current_item = _get_current_playback_item()
 
-    # Player.GetItem is only a fallback when AniBridge
-    # did not provide a mapped episode.
-    if current_item and not mapped:
+    if current_item:
         playback_season = _parse_int(
             current_item.get('season')
         )
@@ -588,25 +597,18 @@ def get_outro_start(item, total_time, media_context=None):
                 if value not in (None, '', -1, '-1')
             })
 
-    show_imdb_id = None
-	
-    if media_context:
-        show_imdb_id = _normalize_imdb_id(
-            media_context.get('show_imdb_id')
-        )
+    # Resolve the TV show IMDb, not the episode IMDb.
+    show_imdb_id = _get_playback_show_imdb_id(
+        current_item,
+        current_episode,
+    )
 
-    if not show_imdb_id:
-        show_imdb_id = _get_playback_show_imdb_id(
-            current_item,
-            current_episode,
-        )
-		
     if not show_imdb_id:
         show_imdb_id = _get_playback_imdb_id(
             current_item,
             current_episode,
-		)
-		
+        )
+
     if not show_imdb_id:
         _log(
             'IntroDB: show IMDb unavailable for S{:02d}E{:02d}'.format(
@@ -626,11 +628,13 @@ def get_outro_start(item, total_time, media_context=None):
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    result = _request(
+    payload = _request(
         show_imdb_id,
         season,
         episode,
     )
+
+    result = _get_outro_start(payload)
 
     if result is not None:
         if total_time <= 0:
@@ -651,10 +655,141 @@ def get_outro_start(item, total_time, media_context=None):
 
     return result
 
+def get_intro_window(item, total_time):
+    """
+    Resolve IntroDB intro start/end for the current episode.
+
+    Returns:
+        tuple(start, end), or None.
+    """
+    if not isinstance(item, dict):
+        return None
+
+    if item.get('type') != 'episode':
+        return None
+
+    details = item.get('details') or {}
+
+    if not isinstance(details, dict):
+        return None
+
+    season = _parse_int(details.get('season'))
+    episode = _parse_int(details.get('episode'))
+
+    if season is None or season < 0:
+        return None
+
+    if episode is None or episode < 0:
+        return None
+
+    current_item = _get_current_playback_item()
+
+    if current_item:
+        playback_season = _parse_int(
+            current_item.get('season')
+        )
+        playback_episode = _parse_int(
+            current_item.get('episode')
+        )
+
+        if playback_season is not None and playback_season >= 0:
+            season = playback_season
+
+        if playback_episode is not None and playback_episode >= 0:
+            episode = playback_episode
+
+    current_episode = current_item or {}
+
+    if not current_episode.get('tvshowid'):
+        current_episode = details.copy()
+
+        if current_item:
+            current_episode.update({
+                key: value
+                for key, value in current_item.items()
+                if value not in (None, '', -1, '-1')
+            })
+
+    show_imdb_id = _get_playback_show_imdb_id(
+        current_item,
+        current_episode,
+    )
+
+    if not show_imdb_id:
+        show_imdb_id = _get_playback_imdb_id(
+            current_item,
+            current_episode,
+        )
+
+    if not show_imdb_id:
+        _log(
+            'IntroDB: show IMDb unavailable for intro S{:02d}E{:02d}'.format(
+                season,
+                episode,
+            ),
+            utils.LOGWARNING
+        )
+        return None
+
+    cache_key = (
+        'intro',
+        show_imdb_id,
+        season,
+        episode,
+    )
+
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
+
+    payload = _request(
+        show_imdb_id,
+        season,
+        episode,
+    )
+
+    if not payload:
+        _CACHE[cache_key] = None
+        return None
+
+    intro_start = _get_segment_start(payload, 'intro')
+    intro_end = _get_segment_end(payload, 'intro')
+
+    if (
+        total_time <= 0
+        or intro_start is None
+        or intro_end is None
+        or intro_start < 0
+        or intro_end <= intro_start
+        or intro_end >= total_time
+    ):
+        _CACHE[cache_key] = None
+        return None
+
+    result = (
+        float(intro_start),
+        float(intro_end),
+    )
+
+    _CACHE[cache_key] = result
+
+    _log(
+        'IntroDB: intro {:.2f}s -> {:.2f}s for {} S{:02d}E{:02d}'.format(
+            intro_start,
+            intro_end,
+            show_imdb_id,
+            season,
+            episode,
+        ),
+        utils.LOGINFO
+    )
+
+    return result
+
 
 def clear_cache():
     """Clear IntroDB caches."""
 
     _CACHE.clear()
+    _PAYLOAD_CACHE.clear()
     _EPISODE_CACHE.clear()
     _SHOW_CACHE.clear()
